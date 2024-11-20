@@ -167,7 +167,7 @@ class InverterModel(BaseModel):
             [
                 f"Type:             {self.sun_spec_did.name}",
                 f"Status:           {self.status.name}",
-                f"Temp:             {self.heat_sink_temp:.2f}W",
+                f"Temp:             {self.heat_sink_temp:.2f}°C",
                 f"-----------------------------",
                 f"AC Current:       {self.ac_current:.2f}A",
                 f"AC Voltage:       {self.ac_voltage_an:.2f}V",
