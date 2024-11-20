@@ -48,36 +48,26 @@ class BaseModel:
         return self._read_int(
             address,
             DATATYPE.UINT16,
-            MAX_INT16 if nullable else None,
-        )
-
-    def _read_scaled_int16(
-        self, address: int, sf_address: int, nullable: bool = False
-    ) -> float | None:
-        """Read an uint16 and apply scaling factor."""
-        value = self._read_int(
-            address,
-            DATATYPE.INT16,
-            MAX_INT16 if nullable else None,
-        )
-        if value is None:
-            return value
-        scale = self._read_int(sf_address, DATATYPE.INT16)
-        return value * pow(10, scale)
-
-    def _read_scaled_uint16(
-        self, address: int, sf_address: int, nullable: bool = False
-    ) -> float | None:
-        """Read an uint16 and apply scaling factor."""
-        value = self._read_int(
-            address,
-            DATATYPE.UINT16,
             MAX_UINT16 if nullable else None,
         )
-        if value is None:
-            return value
-        scale = pow(10, self._read_int(sf_address, DATATYPE.INT16))
-        return value * scale
+
+    def _read_scaled_int16(self, address: int, nullable: bool = False) -> float | None:
+        """Read an int16 and apply scaling factor."""
+        buffer = self._client.read_holding_registers(address, 2).registers
+        if nullable and buffer[0] == MAX_UINT16:
+            return None
+        value = self._client.convert_from_registers(buffer[0:1], DATATYPE.INT16)
+        scale = self._client.convert_from_registers(buffer[1:2], DATATYPE.INT16)
+        return value * pow(10, scale)
+
+    def _read_scaled_uint16(self, address: int, nullable: bool = False) -> float | None:
+        """Read an uint16 and apply scaling factor."""
+        buffer = self._client.read_holding_registers(address, 2).registers
+        if nullable and buffer[0] == MAX_UINT16:
+            return None
+        value = self._client.convert_from_registers(buffer[0:1], DATATYPE.UINT16)
+        scale = self._client.convert_from_registers(buffer[1:2], DATATYPE.INT16)
+        return value * pow(10, scale)
 
     def _read_scaled_acc32(
         self, address: int, sf_address: int, nullable: bool = False
@@ -89,17 +79,20 @@ class BaseModel:
         scale = pow(10, self._read_int(sf_address, DATATYPE.UINT16))
         return value * scale
 
-    def _read_multi_scaled_uint16(
-        self, addresses: list[int], sf_address: int, nullable: bool = True
+    def _read_sequence_scaled_uint16(
+        self, address: int, count: int, nullable: bool = True
     ) -> tuple[float, ...]:
-        """Read multiple uint16 and apply scaling factor."""
-        null_value = MAX_UINT16 if nullable else None
-        scale = pow(10, self._read_int(sf_address, DATATYPE.INT16))
+        buffer = self._client.read_holding_registers(address, count + 1).registers
+        scale = self._client.convert_from_registers(buffer[-1:], DATATYPE.INT16)
+        scalar = pow(10, scale)
         return tuple(
             None
-            if (value := self._read_int(address, DATATYPE.UINT16, null_value)) is None
-            else value * scale
-            for address in addresses
+            if nullable and buffer[idx] == MAX_UINT16
+            else self._client.convert_from_registers(
+                buffer[idx : idx + 1], DATATYPE.UINT16
+            )
+            * scalar
+            for idx in range(count)
         )
 
     def refresh(self):
@@ -120,9 +113,16 @@ class CommonModel(BaseModel):
         return f"{self.manufacturer} {self.model} {self.version} - {self.serial_number}"
 
     def refresh(self):
-        self.sun_spec_id = self._read_int(40_000, DATATYPE.UINT32)
-        self.sun_spec_did = self._read_uint16(40_002)
-        self.sun_spec_len = self._read_uint16(40_003)
+        buffer: list[int] = self._client.read_holding_registers(40_000, 4).registers
+        self.sun_spec_id = self._client.convert_from_registers(
+            buffer[0:2], DATATYPE.UINT32
+        )
+        self.sun_spec_did = self._client.convert_from_registers(
+            buffer[2:3], DATATYPE.UINT16
+        )
+        self.sun_spec_len = self._client.convert_from_registers(
+            buffer[3:4], DATATYPE.UINT16
+        )
         self.manufacturer = self._read_str(40_004, 32)
         self.model = self._read_str(40_020, 32)
         self.version = self._read_str(40_044, 16)
@@ -188,7 +188,7 @@ class InverterModel(BaseModel):
         self.sun_spec_length = self._read_uint16(40_070)
 
         self.ac_current, self.ac_current_a, self.ac_current_b, self.ac_current_c = (
-            self._read_multi_scaled_uint16([40_071, 40_072, 40_073, 40_074], 40_075)
+            self._read_sequence_scaled_uint16(40_071, 4)
         )
         (
             self.ac_voltage_ab,
@@ -197,21 +197,21 @@ class InverterModel(BaseModel):
             self.ac_voltage_an,
             self.ac_voltage_bn,
             self.ac_voltage_cn,
-        ) = self._read_multi_scaled_uint16(
-            [40_076, 40_077, 40_078, 40_079, 40_080, 40_081],
-            40_082,
-        )
-        self.ac_power = self._read_scaled_int16(40_083, 40_084)
-        self.ac_frequency = self._read_scaled_uint16(40_085, 40_086)
-        self.ac_power_apparent = self._read_scaled_int16(40_087, 40_088)
-        self.ac_power_reactive = self._read_scaled_int16(40_089, 40_090)
-        self.ac_power_factor = self._read_scaled_int16(40_091, 40_092)
+        ) = self._read_sequence_scaled_uint16(40_076, 6)
+        self.ac_power = self._read_scaled_int16(40_083)
+        self.ac_frequency = self._read_scaled_uint16(40_085)
+        self.ac_power_apparent = self._read_scaled_int16(40_087)
+        self.ac_power_reactive = self._read_scaled_int16(40_089)
+        self.ac_power_factor = self._read_scaled_int16(40_091)
         self.ac_energy_lifetime = self._read_scaled_acc32(40_093, 40_095)
 
-        self.dc_current = self._read_scaled_uint16(40_096, 40_097)
-        self.dc_voltage = self._read_scaled_uint16(40_098, 40_099)
-        self.dc_power = self._read_scaled_int16(40_100, 40_101)
+        self.dc_current = self._read_scaled_uint16(40_096)
+        self.dc_voltage = self._read_scaled_uint16(40_098)
+        self.dc_power = self._read_scaled_int16(40_100)
 
-        self.heat_sink_temp = self._read_scaled_int16(40_103, 40_106)
+        value = self._read_int16(40_103)
+        scale = self._read_int16(40_106)
+        self.heat_sink_temp = value * pow(10, scale)
+
         self.status = InverterDeviceStatus(self._read_uint16(40_107))
         self.status_vendor = self._read_uint16(40_108)
