@@ -134,11 +134,13 @@ class InverterModel(BaseModel):
     sun_spec_did: InverterDeviceType
     sun_spec_length: uint16
 
+    # AC current total and by phase
     ac_current: float
     ac_current_a: float
     ac_current_b: float
     ac_current_c: float
 
+    # AC voltage between phases and neutral
     ac_voltage_ab: float
     ac_voltage_bc: float
     ac_voltage_ca: float
@@ -158,7 +160,6 @@ class InverterModel(BaseModel):
     dc_power: float
 
     heat_sink_temp: float
-
     status: InverterDeviceStatus
     status_vendor: uint16
 
