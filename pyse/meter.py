@@ -76,6 +76,36 @@ class BaseModel:
         raise NotImplementedError()
 
 
+class CommonModel(BaseModel):
+    sun_spec_did: uint16
+    sun_spec_len: uint16
+    manufacturer: str
+    model: str
+    version: str
+    serial_number: str
+    device_address: uint16
+
+    def __str__(self):
+        return f"{self.manufacturer} {self.model} {self.version} - {self.serial_number}"
+
+    def refresh(self):
+        if buffer := self._read_header():
+            self.manufacturer = read_string(buffer, 0, 16)
+            self.model = read_string(buffer, 16, 16)
+            self.version = read_string(buffer, 32, 8)
+            self.serial_number = read_string(buffer, 40, 16)
+            self.device_address = read_uint16(buffer, 56)
+            return True
+        return False
+
+    def _read_header(self) -> list[int]:
+        buffer = self._read(0, 4)
+        #if read_int32(buffer, 0)
+        did = read_uint16(buffer, 2)
+        length = read_uint16(buffer, 3)
+        return self._read(4, length)
+
+
 class MeterCommonModel(BaseModel):
     manufacturer: str
     model: str
@@ -167,7 +197,7 @@ class MeterDataModel(BaseModel):
                 f"AC Current:         {self.ac_current:.2f}A",
                 f"AC Voltage:         {self.ac_voltage:.2f}V",
                 f"AC Frequency:       {self.ac_frequency:.2f}Hz",
-                f"AC Real Power:      {self.real_power:.2f}W",
+                f"AC Real Power:      {self.real_power/1000:.2f}kW",
                 f"AC Apparent Power:  {self.apparent_power:.2f}VA",
                 f"AC Reactive Power:  {self.reactive_power:.2f}VAR",
                 f"AC Power Factor:    {self.power_factor:.1f}%",
