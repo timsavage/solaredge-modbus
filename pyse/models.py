@@ -231,18 +231,18 @@ class InverterModel(BaseModel):
             [
                 f"Type:             {self.did.name}",
                 f"Status:           {self.status.name}",
-                f"Temp:             {self.heat_sink_temp:.2f}°C",
+                f"Temp:             {self.heat_sink_temp:.2f} °C",
                 f"-----------------------------",
-                f"AC Current:       {self.ac_current:.2f}A",
-                f"AC Voltage:       {self.ac_voltage_phases_to_neutral[0]:.2f}V",
-                f"AC Power:         {self.ac_real_power:.2f}W",
-                f"AC Freq:          {self.ac_frequency:.2f}Hz",
-                f"AC Power Factor:  {self.ac_power_factor:.2f}%",
-                f"AC Total:         {self.ac_energy_lifetime/1000:.2f}kWh",
+                f"AC Current:       {self.ac_current:.2f} A",
+                f"AC Voltage:       {self.ac_voltage_phases_to_neutral[0]:.2f} V",
+                f"AC Power:         {self.ac_real_power:.2f} W",
+                f"AC Freq:          {self.ac_frequency:.2f} Hz",
+                f"AC Power Factor:  {self.ac_power_factor:.2f} %",
+                f"AC Total:         {self.ac_energy_lifetime/1_000_000:.2f} MWh",
                 f"-----------------------------",
-                f"DC Current:       {self.dc_current:.2f}A",
-                f"DC Voltage:       {self.dc_voltage:.2f}V",
-                f"DC Power:         {self.dc_power:.2f}W",
+                f"DC Current:       {self.dc_current:.2f} A",
+                f"DC Voltage:       {self.dc_voltage:.2f} V",
+                f"DC Power:         {self.dc_power:.2f} W",
             ]
         )
 
@@ -358,16 +358,16 @@ class MeterDataModel(BaseModel):
     def __str__(self):
         return "\n".join(
             [
-                f"AC Current:         {self.ac_current:.2f}A",
-                f"AC Voltage:         {self.ac_voltage:.2f}V",
-                f"AC Frequency:       {self.ac_frequency:.2f}Hz",
-                f"AC Real Power:      {self.real_power/1000:.2f}kW",
-                f"AC Apparent Power:  {self.apparent_power:.2f}VA",
-                f"AC Reactive Power:  {self.reactive_power:.2f}VAR",
-                f"AC Power Factor:    {self.power_factor:.1f}%",
+                f"AC Current:         {self.ac_current:.2f} A",
+                f"AC Voltage:         {self.ac_voltage:.2f} V",
+                f"AC Frequency:       {self.ac_frequency:.2f} Hz",
+                f"AC Real Power:      {self.real_power/1000:.2f} kW",
+                f"AC Apparent Power:  {self.apparent_power:.2f} VA",
+                f"AC Reactive Power:  {self.reactive_power:.2f} VAR",
+                f"AC Power Factor:    {self.power_factor:.1f} %",
                 "--------------------------------",
-                f"Real Exported:      {self.real_exported/1_000_000:.2f}MWh",
-                f"Real Imported:      {self.real_imported/1_000_000:.2f}MWh",
+                f"Real Exported:      {self.real_exported/1_000_000:.2f} MWh",
+                f"Real Imported:      {self.real_imported/1_000_000:.2f} MWh",
             ]
         )
 
