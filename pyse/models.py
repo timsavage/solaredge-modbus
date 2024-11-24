@@ -1,108 +1,181 @@
+"""Models that"""
+
+import abc
+from typing import NamedTuple
+
 from pymodbus.client.base import ModbusBaseSyncClient
+from pymodbus.exceptions import ModbusIOException, ModbusException
 
-from .enums import InverterDeviceStatus, InverterDeviceType
+from pyse.enums import MeterDeviceType, InverterDeviceType, InverterDeviceStatus
+from pyse.errors import UnknownDevice
 
 
-DATATYPE = ModbusBaseSyncClient.DATATYPE
+class Phases(NamedTuple):
+    a: float
+    b: float
+    c: float
+
+    @classmethod
+    def scaled(cls, a: float | None, b: float | None, c: float | None, scalar: float):
+        return cls(
+            None if a is None else a * scalar,
+            None if b is None else b * scalar,
+            None if c is None else c * scalar,
+        )
+
+
 type int16 = int
 type uint16 = int
 type int32 = int
 type uint32 = int
+convert = ModbusBaseSyncClient.convert_from_registers
+DATATYPE = ModbusBaseSyncClient.DATATYPE
 
-MAX_UINT16 = 65535
-MAX_INT16 = -0x7FFF
+NULL_16 = (65535,)
+NULL_32 = (65535, 65535)
 
 
-class BaseModel:
-    """Common base model."""
+class Buffer(list[int]):
+    def __init__(self, items):
+        super().__init__(items)
+        self._idx = 0
 
-    def __init__(self, client: ModbusBaseSyncClient):
-        self._client = client
-        self.refresh()
+    def jump(self, idx: int = 0):
+        self._idx = idx
 
-    def _read_str(self, address: int, length: int) -> str:
-        """Read a string from an address."""
-        result = self._client.read_holding_registers(address, length // 2)
-        value = self._client.convert_from_registers(result.registers, DATATYPE.STRING)
+    def _slice(self, length: int) -> list[int]:
+        start = self._idx
+        self._idx += length
+        return self[start : self._idx]
+
+    def undefined(self, size: int):
+        self._idx += size
+
+    def int16(self, nullable: bool = False) -> int16:
+        if nullable:
+            value = self._slice(1)
+            return None if value == NULL_16 else convert(value, DATATYPE.INT16)
+        else:
+            return convert(self._slice(1), DATATYPE.INT16)
+
+    def uint16(self, nullable: bool = False) -> uint16:
+        if nullable:
+            value = self._slice(1)
+            return None if value == NULL_16 else convert(value, DATATYPE.UINT16)
+        else:
+            return convert(self._slice(1), DATATYPE.UINT16)
+
+    def int16_scalar(self) -> float:
+        return pow(10, self.int16())
+
+    def uint16_scalar(self) -> float:
+        return pow(10, self.uint16())
+
+    def int32(self) -> int32:
+        return convert(self._slice(2), DATATYPE.INT32)
+
+    def uint32(self, nullable: bool = False) -> uint32:
+        if nullable:
+            value = self._slice(2)
+            return None if value == NULL_32 else convert(value, DATATYPE.UINT32)
+        else:
+            return convert(self._slice(2), DATATYPE.UINT32)
+
+    def string(self, size: int):
+        value = convert(self._slice(size), DATATYPE.STRING)
         return value.strip("\x00")
 
-    def _read_int(
-        self, address: int, datatype: DATATYPE, null_value: int | None = None
-    ) -> int | None:
-        """Read an integer from an address."""
-        _, count = datatype.value
-        result = self._client.read_holding_registers(address, count)
-        value = self._client.convert_from_registers(result.registers, datatype)
-        return None if value == null_value else value
-
-    def _read_int16(self, address: int, nullable: bool = False) -> int | None:
-        """Read an int16 from an address."""
-        return self._read_int(
-            address,
-            DATATYPE.INT16,
-            MAX_INT16 if nullable else None,
+    def int16_sum_and_phases(self) -> tuple[float, Phases]:
+        sum_value = self.int16()
+        phase_a = self.int16()
+        phase_b = self.int16(nullable=True)
+        phase_c = self.int16(nullable=True)
+        scalar = self.int16_scalar()
+        return (
+            sum_value * scalar,
+            Phases.scaled(phase_a, phase_b, phase_c, scalar),
         )
 
-    def _read_uint16(self, address: int, nullable: bool = False) -> int | None:
-        """Read an uint16 from an address."""
-        return self._read_int(
-            address,
-            DATATYPE.UINT16,
-            MAX_UINT16 if nullable else None,
+    def uint16_sum_and_phases(self) -> tuple[float, Phases]:
+        sum_value = self.uint16()
+        phase_a = self.uint16()
+        phase_b = self.uint16(nullable=True)
+        phase_c = self.uint16(nullable=True)
+        scalar = self.int16_scalar()
+        return (
+            sum_value * scalar,
+            Phases.scaled(phase_a, phase_b, phase_c, scalar),
         )
 
-    def _read_scaled_int16(self, address: int, nullable: bool = False) -> float | None:
-        """Read an int16 and apply scaling factor."""
-        buffer = self._client.read_holding_registers(address, 2).registers
-        if nullable and buffer[0] == MAX_UINT16:
-            return None
-        value = self._client.convert_from_registers(buffer[0:1], DATATYPE.INT16)
-        scale = self._client.convert_from_registers(buffer[1:2], DATATYPE.INT16)
-        return value * pow(10, scale)
-
-    def _read_scaled_uint16(self, address: int, nullable: bool = False) -> float | None:
-        """Read an uint16 and apply scaling factor."""
-        buffer = self._client.read_holding_registers(address, 2).registers
-        if nullable and buffer[0] == MAX_UINT16:
-            return None
-        value = self._client.convert_from_registers(buffer[0:1], DATATYPE.UINT16)
-        scale = self._client.convert_from_registers(buffer[1:2], DATATYPE.INT16)
-        return value * pow(10, scale)
-
-    def _read_scaled_acc32(
-        self, address: int, sf_address: int, nullable: bool = False
-    ) -> float | None:
-        """Read an acc32 and apply scaling factor."""
-        value = self._read_int(address, DATATYPE.UINT32)
-        if value is None:
-            return value
-        scale = pow(10, self._read_int(sf_address, DATATYPE.UINT16))
-        return value * scale
-
-    def _read_sequence_scaled_uint16(
-        self, address: int, count: int, nullable: bool = True
-    ) -> tuple[float, ...]:
-        buffer = self._client.read_holding_registers(address, count + 1).registers
-        scale = self._client.convert_from_registers(buffer[-1:], DATATYPE.INT16)
-        scalar = pow(10, scale)
-        return tuple(
-            None
-            if nullable and buffer[idx] == MAX_UINT16
-            else self._client.convert_from_registers(
-                buffer[idx : idx + 1], DATATYPE.UINT16
-            )
-            * scalar
-            for idx in range(count)
+    def voltage_phases(self) -> tuple[Phases, Phases]:
+        phase_ab = self.int16()
+        phase_bc = self.int16()
+        phase_ca = self.int16()
+        phase_an = self.uint16()
+        phase_bn = self.uint16(nullable=True)
+        phase_cn = self.uint16(nullable=True)
+        scalar = self.int16_scalar()
+        return (
+            Phases(phase_ab * scalar, phase_bc * scalar, phase_ca * scalar),
+            Phases.scaled(phase_an, phase_bn, phase_cn, scalar),
         )
+
+    def acc32_import_export(self) -> tuple[float, Phases, float, Phases]:
+        import_sum = self.uint32()
+        import_phase_a = self.uint32()
+        import_phase_b = self.uint32(nullable=True)
+        import_phase_c = self.uint32(nullable=True)
+        export_sum = self.uint32()
+        export_phase_a = self.uint32()
+        export_phase_b = self.uint32(nullable=True)
+        export_phase_c = self.uint32(nullable=True)
+        scalar = self.int16_scalar()
+        return (
+            import_sum * scalar,
+            Phases.scaled(import_phase_a, import_phase_b, import_phase_c, scalar),
+            export_sum * scalar,
+            Phases.scaled(export_phase_a, export_phase_b, export_phase_c, scalar),
+        )
+
+
+class BaseModel(abc.ABC):
+    BASE_ADDRESS: int = 40_000
+    HEADER_SIZE: int = 2
+
+    def __init__(
+        self, client: ModbusBaseSyncClient, base_address: int = None, unit: int = 1
+    ):
+        self.client = client
+        self._base = base_address or self.BASE_ADDRESS
+        self._unit = unit
+
+    @abc.abstractmethod
+    def _parse_header(self, buffer: Buffer) -> int:
+        """Read header and return length of body."""
+
+    @abc.abstractmethod
+    def _parse_body(self, buffer: Buffer):
+        """Read body and populate model."""
 
     def refresh(self):
-        pass
+        """Refresh model."""
+        read = self.client.read_holding_registers
+
+        result = read(self._base, self.HEADER_SIZE, self._unit)
+        if isinstance(result, ModbusException):
+            raise result
+        buffer = Buffer(result.registers)
+        body_length = self._parse_header(buffer)
+
+        buffer = Buffer(
+            read(self._base + self.HEADER_SIZE, body_length, self._unit).registers
+        )
+        self._parse_body(buffer)
 
 
 class CommonModel(BaseModel):
-    sun_spec_id: uint32
-    sun_spec_did: uint16
-    sun_spec_len: uint16
+    HEADER_SIZE: int = 4
+
     manufacturer: str
     model: str
     version: str
@@ -112,46 +185,36 @@ class CommonModel(BaseModel):
     def __str__(self):
         return f"{self.manufacturer} {self.model} {self.version} - {self.serial_number}"
 
-    def refresh(self):
-        buffer: list[int] = self._client.read_holding_registers(40_000, 4).registers
-        self.sun_spec_id = self._client.convert_from_registers(
-            buffer[0:2], DATATYPE.UINT32
-        )
-        self.sun_spec_did = self._client.convert_from_registers(
-            buffer[2:3], DATATYPE.UINT16
-        )
-        self.sun_spec_len = self._client.convert_from_registers(
-            buffer[3:4], DATATYPE.UINT16
-        )
-        self.manufacturer = self._read_str(40_004, 32)
-        self.model = self._read_str(40_020, 32)
-        self.version = self._read_str(40_044, 16)
-        self.serial_number = self._read_str(40_052, 32)
-        self.device_address = self._read_uint16(40_068)
+    def _parse_header(self, buffer: Buffer) -> int:
+        if buffer.uint32() != 0x53756E53:
+            raise UnknownDevice("Not a valid SunSpec Register Map")
+        if buffer.uint16() != 1:
+            raise UnknownDevice("Not a Common Model block")
+        return buffer.uint16()
+
+    def _parse_body(self, buffer: Buffer):
+        self.manufacturer = buffer.string(16)
+        self.model = buffer.string(16)
+        buffer.undefined(8)
+        self.version = buffer.string(8)
+        self.serial_number = buffer.string(16)
+        self.device_address = buffer.uint16()
 
 
 class InverterModel(BaseModel):
-    sun_spec_did: InverterDeviceType
-    sun_spec_length: uint16
+    BASE_ADDRESS = 40_069
+    HEADER_SIZE: int = 2
 
-    # AC current total and by phase
+    did: InverterDeviceType
+
     ac_current: float
-    ac_current_a: float
-    ac_current_b: float
-    ac_current_c: float
-
-    # AC voltage between phases and neutral
-    ac_voltage_ab: float
-    ac_voltage_bc: float
-    ac_voltage_ca: float
-    ac_voltage_an: float
-    ac_voltage_bn: float
-    ac_voltage_cn: float
-
-    ac_power: float
+    ac_current_phases: Phases
+    ac_voltage_between_phases: Phases
+    ac_voltage_phases_to_neutral: Phases
+    ac_real_power: float
     ac_frequency: float
-    ac_power_apparent: float
-    ac_power_reactive: float
+    ac_apparent_power: float
+    ac_reactive_power: float
     ac_power_factor: float
     ac_energy_lifetime: float
 
@@ -166,16 +229,16 @@ class InverterModel(BaseModel):
     def __str__(self):
         return "\n".join(
             [
-                f"Type:             {self.sun_spec_did.name}",
+                f"Type:             {self.did.name}",
                 f"Status:           {self.status.name}",
                 f"Temp:             {self.heat_sink_temp:.2f}°C",
                 f"-----------------------------",
                 f"AC Current:       {self.ac_current:.2f}A",
-                f"AC Voltage:       {self.ac_voltage_an:.2f}V",
-                f"AC Power:         {self.ac_power:.2f}W",
+                f"AC Voltage:       {self.ac_voltage_phases_to_neutral[0]:.2f}V",
+                f"AC Power:         {self.ac_real_power:.2f}W",
                 f"AC Freq:          {self.ac_frequency:.2f}Hz",
                 f"AC Power Factor:  {self.ac_power_factor:.2f}%",
-                f"AC Total:         {self.ac_energy_lifetime}Wh",
+                f"AC Total:         {self.ac_energy_lifetime/1000:.2f}kWh",
                 f"-----------------------------",
                 f"DC Current:       {self.dc_current:.2f}A",
                 f"DC Voltage:       {self.dc_voltage:.2f}V",
@@ -183,35 +246,159 @@ class InverterModel(BaseModel):
             ]
         )
 
-    def refresh(self):
-        self.sun_spec_did = InverterDeviceType(self._read_uint16(40_069))
-        self.sun_spec_length = self._read_uint16(40_070)
+    def _parse_header(self, buffer: Buffer) -> int:
+        self.did = InverterDeviceType(buffer.uint16())
+        return buffer.uint16()
 
-        self.ac_current, self.ac_current_a, self.ac_current_b, self.ac_current_c = (
-            self._read_sequence_scaled_uint16(40_071, 4)
+    def _parse_body(self, buffer: Buffer):
+        self.ac_current, self.ac_current_phases = buffer.uint16_sum_and_phases()
+        self.ac_voltage_between_phases, self.ac_voltage_phases_to_neutral = (
+            buffer.voltage_phases()
         )
+        self.ac_real_power = buffer.int16() * buffer.int16_scalar()
+        self.ac_frequency = buffer.uint16() * buffer.int16_scalar()
+        self.ac_apparent_power = buffer.int16() * buffer.int16_scalar()
+        self.ac_reactive_power = buffer.int16() * buffer.int16_scalar()
+        self.ac_power_factor = buffer.int16() * buffer.int16_scalar()
+        self.ac_energy_lifetime = buffer.uint32() * buffer.uint16_scalar()
+
+        self.dc_current = buffer.uint16() * buffer.int16_scalar()
+        self.dc_voltage = buffer.uint16() * buffer.int16_scalar()
+        self.dc_power = buffer.int16() * buffer.int16_scalar()
+
+        buffer.undefined(1)
+        temp = buffer.int16()
+        buffer.undefined(2)
+        self.heat_sink_temp = temp * buffer.int16_scalar()
+
+        self.status = InverterDeviceStatus(buffer.uint16())
+        self.status_vendor = buffer.uint16()
+
+
+class MeterCommonModel(BaseModel):
+    HEADER_SIZE: int = 2
+
+    manufacturer: str
+    model: str
+    option: str
+    version: str
+    serial_number: str
+    device_address: uint16
+
+    @classmethod
+    def meter_1(cls, client: ModbusBaseSyncClient):
+        return cls(client, 40_121)
+
+    @classmethod
+    def meter_2(cls, client: ModbusBaseSyncClient):
+        return cls(client, 40_295)
+
+    @classmethod
+    def meter_3(cls, client: ModbusBaseSyncClient):
+        return cls(client, 40_469)
+
+    def __str__(self):
+        return f"{self.manufacturer} {self.model} {self.option} {self.version} - {self.serial_number}"
+
+    def _parse_header(self, buffer: Buffer) -> int:
+        if buffer.uint16() != 1:
+            raise RuntimeError("Not a meter.")
+        return buffer.uint16()
+
+    def _parse_body(self, buffer: Buffer):
+        self.manufacturer = buffer.string(16)
+        self.model = buffer.string(16)
+        self.option = buffer.string(8)
+        self.version = buffer.string(8)
+        self.serial_number = buffer.string(16)
+        self.device_address = buffer.uint16()
+
+
+class MeterDataModel(BaseModel):
+    HEADER_SIZE: int = 2
+
+    type: MeterDeviceType
+
+    ac_current: float
+    ac_current_phases: Phases
+    # Line to Neutral voltage
+    ac_voltage: float
+    ac_voltage_phases: Phases
+    # Line To Line voltage not supported
+    ac_frequency: float
+    real_power: float
+    real_power_phases: Phases
+    apparent_power: float
+    apparent_power_phases: Phases
+    reactive_power: float
+    reactive_power_phases: Phases
+    power_factor: float
+    power_factor_phases: Phases
+
+    real_exported: float
+    real_exported_phases: Phases
+    real_imported: float
+    real_imported_phases: Phases
+
+    @classmethod
+    def meter_1(cls, client: ModbusBaseSyncClient):
+        return cls(client, 40_188)
+
+    @classmethod
+    def meter_2(cls, client: ModbusBaseSyncClient):
+        return cls(client, 40_362)
+
+    @classmethod
+    def meter_3(cls, client: ModbusBaseSyncClient):
+        return cls(client, 40_537)
+
+    def __init__(self, client: ModbusBaseSyncClient, base_address: int = 40_188):
+        super().__init__(client, base_address)
+
+    def __str__(self):
+        return "\n".join(
+            [
+                f"AC Current:         {self.ac_current:.2f}A",
+                f"AC Voltage:         {self.ac_voltage:.2f}V",
+                f"AC Frequency:       {self.ac_frequency:.2f}Hz",
+                f"AC Real Power:      {self.real_power/1000:.2f}kW",
+                f"AC Apparent Power:  {self.apparent_power:.2f}VA",
+                f"AC Reactive Power:  {self.reactive_power:.2f}VAR",
+                f"AC Power Factor:    {self.power_factor:.1f}%",
+                "--------------------------------",
+                f"Real Exported:      {self.real_exported/1_000_000:.2f}MWh",
+                f"Real Imported:      {self.real_imported/1_000_000:.2f}MWh",
+            ]
+        )
+
+    def _parse_header(self, buffer: Buffer) -> int:
+        self.type = MeterDeviceType(buffer.uint16())
+        return buffer.uint16()
+
+    def _parse_voltages(self, buffer: Buffer):
+        value = buffer.int16()
+        phase_a = buffer.int16()
+        phase_b = buffer.int16(nullable=True)
+        phase_c = buffer.int16(nullable=True)
+        buffer.undefined(4)  # Not supported by Solar Edge inverters
+        scalar = buffer.int16_scalar()
+        self.ac_voltage = value * scalar
+        self.ac_voltage_to_neutral = Phases.scaled(phase_a, phase_b, phase_c, scalar)
+
+    def _parse_body(self, buffer: Buffer):
+        self.ac_current, self.ac_current_phases = buffer.int16_sum_and_phases()
+        self._parse_voltages(buffer)
+
+        self.ac_frequency = buffer.int16() * buffer.int16_scalar()
+
+        self.real_power, self.real_power_phases = buffer.int16_sum_and_phases()
+        self.apparent_power, self.apparent_power_phases = buffer.int16_sum_and_phases()
+        self.reactive_power, self.reactive_power_phases = buffer.int16_sum_and_phases()
+        self.power_factor, self.power_factor_phases = buffer.int16_sum_and_phases()
+
         (
-            self.ac_voltage_ab,
-            self.ac_voltage_bc,
-            self.ac_voltage_ca,
-            self.ac_voltage_an,
-            self.ac_voltage_bn,
-            self.ac_voltage_cn,
-        ) = self._read_sequence_scaled_uint16(40_076, 6)
-        self.ac_power = self._read_scaled_int16(40_083)
-        self.ac_frequency = self._read_scaled_uint16(40_085)
-        self.ac_power_apparent = self._read_scaled_int16(40_087)
-        self.ac_power_reactive = self._read_scaled_int16(40_089)
-        self.ac_power_factor = self._read_scaled_int16(40_091)
-        self.ac_energy_lifetime = self._read_scaled_acc32(40_093, 40_095)
-
-        self.dc_current = self._read_scaled_uint16(40_096)
-        self.dc_voltage = self._read_scaled_uint16(40_098)
-        self.dc_power = self._read_scaled_int16(40_100)
-
-        value = self._read_int16(40_103)
-        scale = self._read_int16(40_106)
-        self.heat_sink_temp = value * pow(10, scale)
-
-        self.status = InverterDeviceStatus(self._read_uint16(40_107))
-        self.status_vendor = self._read_uint16(40_108)
+            self.real_exported,
+            self.real_exported_phases,
+            self.real_imported,
+            self.real_imported_phases,
+        ) = buffer.acc32_import_export()
